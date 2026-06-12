@@ -1,5 +1,5 @@
-from ..simulator.simulator import EpisodeSimulator, SimulatorStats
-from ..simulator.models import TaskType, FailureMode
+from simulator.simulator import EpisodeSimulator, SimulatorStats
+from simulator.models import TaskType, FailureMode
 from scoring.scorer import EpisodeScoringEngine
 
 sim    = EpisodeSimulator(seed=42)
