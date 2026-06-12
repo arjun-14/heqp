@@ -27,7 +27,8 @@ for i in range(100):
         print(f"Episode {i+1}: {episode.task_type.value:15s} | "
               f"failure={episode.injected_failure.value:20s} | "
               f"score={result.composite_score:5.1f} | "
-              f"{result.routing_decision}")
+              f"{result.routing_decision:10s} | "
+              f"size: {episode.size_kb:.1f} KB")
 
 print(f"\n--- 100 Episode Summary ---")
 print(f"CERTIFIED:  {results['CERTIFIED']}")

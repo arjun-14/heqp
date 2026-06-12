@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from models import (
+from .models import (
     Episode, SensorFrame, CameraFrame, PhaseEvent,
     TaskType, TaskPhase, EpisodeStatus, FailureMode
 )

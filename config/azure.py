@@ -15,8 +15,14 @@ def load_env(env_file: str = ".env"):
     Parse a simple KEY=VALUE .env file and populate os.environ.
     Skips blank lines and comments (#).
     """
-    p = Path(env_file)
-    if not p.exists():
+    search_paths = [
+        Path(env_file),
+        Path(__file__).parent / env_file,
+        Path(__file__).parent.parent / env_file
+    ]
+    
+    p = next((path for path in search_paths if path.is_file()), None)
+    if not p:
         return
     for line in p.read_text().splitlines():
         line = line.strip()

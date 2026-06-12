@@ -11,6 +11,7 @@ Target throughput: 10,000+ episodes/hour (~2.8 episodes/second).
 from __future__ import annotations
 
 import json
+import gzip
 import logging
 import time
 from dataclasses import asdict
@@ -63,7 +64,10 @@ def episode_to_json(episode, score_result: Optional[dict] = None) -> bytes:
     payload = _episode_to_dict(episode)
     if score_result is not None:
         payload["_score"] = score_result
-    return json.dumps(payload, default=str).encode("utf-8")
+        
+    # Strip spaces to save bytes, then gzip compress the payload
+    json_bytes = json.dumps(payload, default=str, separators=(',', ':')).encode("utf-8")
+    return gzip.compress(json_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -172,15 +176,34 @@ class HEQPProducer:
         current_batch_events: list[EventData] = []
 
         def _flush_batch(events: list[EventData]):
-            """Send accumulated events as one EventDataBatch (round-robin balanced)."""
+            """Send accumulated events, splitting into multiple batches if 1MB limit is hit."""
+            def _send_current_batch(b):
+                if len(b) > 0:
+                    self._client.send_batch(b)
+                    self._batch_count += 1
+
             try:
-                # No partition key! Azure will round-robin the whole batch to one partition.
                 batch = self._client.create_batch()
+                sent_count = 0
                 for ev in events:
-                    batch.add(ev)
-                self._client.send_batch(batch)
-                self._sent_total += len(events)
-                self._batch_count += 1
+                    try:
+                        batch.add(ev)
+                        sent_count += 1
+                    except ValueError:
+                        # Batch limit reached (1MB). Send current and start a new one.
+                        _send_current_batch(batch)
+                        batch = self._client.create_batch()
+                        try:
+                            batch.add(ev)
+                            sent_count += 1
+                        except ValueError:
+                            logger.error("Event too large for single batch even after compression. Dropping.")
+                            self._failed_total += 1
+                
+                # Send the final partially filled batch
+                _send_current_batch(batch)
+                    
+                self._sent_total += sent_count
             except EventHubError as exc:
                 logger.error("Batch send failed: %s", exc)
                 self._failed_total += len(events)

@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import gzip
 import logging
 import os
 import sys
@@ -54,7 +55,18 @@ def validate_events(
             return
 
         try:
-            payload = json.loads(event.body_as_str())
+            # Safely extract raw bytes from the Azure EventData object
+            body_content = event.body
+            raw_bytes = body_content if isinstance(body_content, bytes) else b"".join(body_content)
+            
+            try:
+                # Attempt to decompress
+                decompressed = gzip.decompress(raw_bytes)
+                payload = json.loads(decompressed.decode("utf-8"))
+            except gzip.BadGzipFile:
+                # Fallback: if it fails to decompress, assume it's an older uncompressed message
+                payload = json.loads(event.body_as_str())
+
             received.append(payload)
 
             ep_id = payload.get("episode_id", "?")
