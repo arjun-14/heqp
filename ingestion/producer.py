@@ -85,20 +85,15 @@ class HEQPProducer:
         Azure Event Hubs connection string (primary key).
     eventhub_name : str
         Name of the Event Hub (default: "heqp-episodes").
-    batch_size : int
-        Max episodes per EventDataBatch before flushing (default: 50).
-        Azure Event Hubs max batch size is 1 MB; 50 episodes is well under.
     """
 
     def __init__(
         self,
         connection_str: str,
         eventhub_name: str = "heqp-episodes",
-        batch_size: int = 50,
     ):
         self.connection_str = connection_str
         self.eventhub_name = eventhub_name
-        self.batch_size = batch_size
 
         self._client: Optional[EventHubProducerClient] = None
 
@@ -173,42 +168,10 @@ class HEQPProducer:
         certified = borderline = rejected = 0
         latencies: list[float] = []
 
-        current_batch_events: list[EventData] = []
-
-        def _flush_batch(events: list[EventData]):
-            """Send accumulated events, splitting into multiple batches if 1MB limit is hit."""
-            def _send_current_batch(b):
-                if len(b) > 0:
-                    self._client.send_batch(b)
-                    self._batch_count += 1
-
-            try:
-                batch = self._client.create_batch()
-                sent_count = 0
-                for ev in events:
-                    try:
-                        batch.add(ev)
-                        sent_count += 1
-                    except ValueError:
-                        # Batch limit reached (1MB). Send current and start a new one.
-                        _send_current_batch(batch)
-                        batch = self._client.create_batch()
-                        try:
-                            batch.add(ev)
-                            sent_count += 1
-                        except ValueError:
-                            logger.error("Event too large for single batch even after compression. Dropping.")
-                            self._failed_total += 1
-                
-                # Send the final partially filled batch
-                _send_current_batch(batch)
-                    
-                self._sent_total += sent_count
-            except EventHubError as exc:
-                logger.error("Batch send failed: %s", exc)
-                self._failed_total += len(events)
-
         stream_start = time.perf_counter()
+        
+        # Initialize our first continuous batch
+        batch = self._client.create_batch()
 
         for i in range(1, n_episodes + 1):
             t0 = time.perf_counter()
@@ -231,12 +194,26 @@ class HEQPProducer:
             # 4. Serialise → EventData
             payload = episode_to_json(episode, score_result.to_dict())
             event = EventData(payload)
-            current_batch_events.append(event)
 
-            # 5. Flush when batch is full
-            if len(current_batch_events) >= self.batch_size:
-                _flush_batch(current_batch_events)
-                current_batch_events = []
+            # 5. Add to batch, flush if it hits 1MB
+            try:
+                batch.add(event)
+            except ValueError:
+                # The batch is full! Send it.
+                if len(batch) > 0:
+                    self._client.send_batch(batch)
+                    self._sent_total += len(batch)
+                    self._batch_count += 1
+                
+                # Create a fresh batch and add the event that just got rejected
+                batch = self._client.create_batch()
+                try:
+                    batch.add(event)
+                except ValueError:
+                    logger.error("Event too large for single batch even after compression. Dropping.")
+                    self._failed_total += 1
+            except EventHubError as exc:
+                logger.error("Network error while adding/sending: %s", exc)
 
             latencies.append((time.perf_counter() - t0) * 1000)
 
@@ -248,9 +225,15 @@ class HEQPProducer:
                     i, n_episodes, rate, certified, borderline, rejected,
                 )
 
-        # Flush remainder
-        if current_batch_events:
-            _flush_batch(current_batch_events)
+        # Flush any remaining events in the final batch after the loop ends
+        if len(batch) > 0:
+            try:
+                self._client.send_batch(batch)
+                self._sent_total += len(batch)
+                self._batch_count += 1
+            except EventHubError as exc:
+                logger.error("Failed to send final batch: %s", exc)
+                self._failed_total += len(batch)
 
         elapsed_total = time.perf_counter() - stream_start
         throughput = n_episodes / elapsed_total
@@ -301,7 +284,6 @@ def main():
     )
     parser.add_argument("--eventhub", default=EVENTHUB_NAME)
     parser.add_argument("--episodes", type=int, default=500)
-    parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--log-every", type=int, default=100)
     args = parser.parse_args()
 
@@ -318,7 +300,6 @@ def main():
     with HEQPProducer(
         connection_str=conn_str,
         eventhub_name=args.eventhub,
-        batch_size=args.batch_size,
     ) as producer:
         summary = producer.stream_episodes(
             simulator=simulator,
