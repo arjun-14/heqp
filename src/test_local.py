@@ -1,10 +1,6 @@
-import sys
-sys.path.insert(0, 'simulator')
-sys.path.insert(0, 'scoring')
-
-from simulator import EpisodeSimulator, SimulatorStats
-from models import TaskType, FailureMode
-from scorer import EpisodeScoringEngine
+from ..simulator.simulator import EpisodeSimulator, SimulatorStats
+from ..simulator.models import TaskType, FailureMode
+from scoring.scorer import EpisodeScoringEngine
 
 sim    = EpisodeSimulator(seed=42)
 engine = EpisodeScoringEngine()
