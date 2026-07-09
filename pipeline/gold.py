@@ -1,99 +1,34 @@
-import json, gzip
-import dlt
+"""
+warehouse/pipelines/gold.py
+----------------------------
+HEQP Gold Layer
 
-from pyspark.sql.types import (
-    StructType, StructField, StringType, FloatType, BooleanType, IntegerType, BinaryType, ArrayType
-)
-from pyspark.sql.functions import udf, col, current_timestamp
+Business-level aggregations and metrics for analytics and reporting.
+"""
+
+import dlt
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 
-BRONZE_PATH = "/Volumes/main/heqp/bronze"
-
-SILVER_SCHEMA = StructType([
-    StructField("episode_id",           StringType(),  True),
-    StructField("robot_id",             StringType(),  True),
-    StructField("operator_id",          StringType(),  True),
-    StructField("task_type",            StringType(),  True),
-    StructField("status",               StringType(),  True),
-    StructField("duration_ms",          FloatType(),   True),
-    StructField("frame_count",          IntegerType(), True),
-    StructField("injected_failure",     StringType(),  True),
-    StructField("sensor_completeness",  FloatType(),   True),
-    StructField("temporal_coherence",   FloatType(),   True),
-    StructField("motion_smoothness",    FloatType(),   True),
-    StructField("task_completion",      FloatType(),   True),
-    StructField("trajectory_validity",  FloatType(),   True),
-    StructField("composite_score",      FloatType(),   True),
-    StructField("routing_decision",     StringType(),  False),
-    StructField("failure_flags", ArrayType(StringType()), True),
-    StructField("scoring_latency_ms",   FloatType(),   True),
-])
-
-@udf(returnType=SILVER_SCHEMA)
-def extract_payload(payload):
-    if not payload:
-        return None
-    try:
-        ep = json.loads(gzip.decompress(bytes(payload)).decode("utf-8"))
-    except Exception:
-        return None
-    score = ep.get("_score", {})
-    if not score:
-        return None
-    return {
-        "episode_id":          ep.get("episode_id"),
-        "robot_id":            ep.get("robot_id"),
-        "operator_id":         ep.get("operator_id"),
-        "task_type":           ep.get("task_type"),
-        "status":              ep.get("status"),
-        "duration_ms":         float(ep.get("duration_ms", 0.0)),
-        "frame_count":         int(score.get("frame_count", 0)),
-        "injected_failure":    ep.get("injected_failure", "none"),
-        "sensor_completeness": float(score.get("score_sensor_completeness", 0.0)),
-        "temporal_coherence":  float(score.get("score_temporal_coherence", 0.0)),
-        "motion_smoothness":   float(score.get("score_motion_smoothness", 0.0)),
-        "task_completion":     float(score.get("score_task_completion", 0.0)),
-        "trajectory_validity": float(score.get("score_trajectory_validity", 0.0)),
-        "composite_score":     float(score.get("composite_score", 0.0)),
-        "routing_decision":    score.get("routing_decision", "REJECTED"),
-        "failure_flags":       score.get("failure_flags", []),
-        "scoring_latency_ms":  float(score.get("scoring_latency_ms", 0.0)),
-    }
-
-@dlt.view
-def bronze_raw():
-    return spark.read.format("delta").load(BRONZE_PATH)
-
-
-@dlt.table(
-    name="silver",
-    comment="Structured episodes extracted from Bronze compressed payloads.",
-    partition_cols=["routing_decision"],
-)
-@dlt.expect_or_drop("valid_episode_id", "episode_id IS NOT NULL")
-@dlt.expect_or_drop("valid_routing",    "routing_decision IN ('CERTIFIED', 'BORDERLINE', 'REJECTED')")
-@dlt.expect("valid_score",              "composite_score BETWEEN 0 AND 100")
-def silver():
-    bronze = dlt.read("bronze_raw")
-    return (
-        bronze
-        .withColumn("parsed", extract_payload(col("payload").cast(BinaryType())))
-        .filter(col("parsed").isNotNull())
-        .select(
-            col("parsed.*"),
-            col("ingested_at"),
-            current_timestamp().cast(StringType()).alias("scored_at"),
-        )
-    )
+# ---------------------------------------------------------------------------
+# Gold 1 — Daily Robot Statistics
+# ---------------------------------------------------------------------------
 
 @dlt.table(
     name="gold_daily_robot_stats",
     comment="Pass rate, avg score and episode volume per robot per day",
 )
 def gold_daily_robot_stats():
-    silver = dlt.read("silver")
+    """
+    Daily performance metrics by robot and task type.
+    
+    Aggregates:
+    - Episode counts by routing decision
+    - Composite score statistics (avg, min, max, percentiles)
+    - Certification rate percentage
+    """
+    silver = dlt.read("silver_episodes")
     return (
         silver
         .withColumn("report_date", F.to_date("ingested_at"))
@@ -116,15 +51,23 @@ def gold_daily_robot_stats():
         .orderBy("report_date", "robot_id", "task_type")
     )
 
+
 # ---------------------------------------------------------------------------
-# Gold 2 — Failure summary
+# Gold 2 — Failure Summary
 # ---------------------------------------------------------------------------
+
 @dlt.table(
     name="gold_failure_summary",
     comment="Failure flag frequency by task type and routing decision.",
 )
 def gold_failure_summary():
-    silver = dlt.read("silver")
+    """
+    Analysis of failure patterns across episodes.
+    
+    Explodes failure_flags array and ranks failures by frequency.
+    Shows which failures are most common and their impact on scores.
+    """
+    silver = dlt.read("silver_episodes")
     exploded = (
         silver
         .filter(F.col("failure_flags").isNotNull() & (F.size("failure_flags") > 0))
@@ -151,15 +94,25 @@ def gold_failure_summary():
         .orderBy("report_date", "task_type", "failure_rank")
     )
 
+
 # ---------------------------------------------------------------------------
-# Gold 3 — SLA compliance
+# Gold 3 — SLA Compliance
 # ---------------------------------------------------------------------------
+
 @dlt.table(
     name="gold_sla_compliance",
     comment="Daily CERTIFIED rate with rolling 7-day trend and SLA status.",
 )
 def gold_sla_compliance():
-    silver = dlt.read("silver")
+    """
+    SLA monitoring dashboard table.
+    
+    Tracks:
+    - Daily certification rates
+    - 7-day rolling averages
+    - SLA status (MET ≥70%, AT_RISK 60-70%, BREACHED <60%)
+    """
+    silver = dlt.read("silver_episodes")
     daily = (
         silver
         .withColumn("report_date", F.to_date("ingested_at"))
