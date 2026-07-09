@@ -14,11 +14,9 @@ Setup:
        databricks secrets create-scope --scope event-hubs
        databricks secrets put --scope event-hubs --key connection-string
     
-    2. Create Unity Catalog volumes:
+    2. Ensure Unity Catalog destination exists (pipeline writes to main.heqp):
        CREATE CATALOG IF NOT EXISTS main;
        CREATE SCHEMA IF NOT EXISTS main.heqp;
-       CREATE VOLUME IF NOT EXISTS main.heqp.bronze;
-       CREATE VOLUME IF NOT EXISTS main.heqp.checkpoints;
     
     3. Enable continuous mode in pipeline settings for real-time ingestion:
        continuous: true

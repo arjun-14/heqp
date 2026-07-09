@@ -6,7 +6,7 @@ HEQP Gold Layer
 Business-level aggregations and metrics for analytics and reporting.
 """
 
-import dlt
+from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -15,7 +15,7 @@ from pyspark.sql.window import Window
 # Gold 1 — Daily Robot Statistics
 # ---------------------------------------------------------------------------
 
-@dlt.table(
+@dp.table(
     name="gold_daily_robot_stats",
     comment="Pass rate, avg score and episode volume per robot per day",
 )
@@ -28,7 +28,7 @@ def gold_daily_robot_stats():
     - Composite score statistics (avg, min, max, percentiles)
     - Certification rate percentage
     """
-    silver = dlt.read("silver_episodes")
+    silver = spark.read.table("silver_episodes")
     return (
         silver
         .withColumn("report_date", F.to_date("ingested_at"))
@@ -56,7 +56,7 @@ def gold_daily_robot_stats():
 # Gold 2 — Failure Summary
 # ---------------------------------------------------------------------------
 
-@dlt.table(
+@dp.table(
     name="gold_failure_summary",
     comment="Failure flag frequency by task type and routing decision.",
 )
@@ -67,7 +67,7 @@ def gold_failure_summary():
     Explodes failure_flags array and ranks failures by frequency.
     Shows which failures are most common and their impact on scores.
     """
-    silver = dlt.read("silver_episodes")
+    silver = spark.read.table("silver_episodes")
     exploded = (
         silver
         .filter(F.col("failure_flags").isNotNull() & (F.size("failure_flags") > 0))
@@ -99,7 +99,7 @@ def gold_failure_summary():
 # Gold 3 — SLA Compliance
 # ---------------------------------------------------------------------------
 
-@dlt.table(
+@dp.table(
     name="gold_sla_compliance",
     comment="Daily CERTIFIED rate with rolling 7-day trend and SLA status.",
 )
@@ -112,7 +112,7 @@ def gold_sla_compliance():
     - 7-day rolling averages
     - SLA status (MET ≥70%, AT_RISK 60-70%, BREACHED <60%)
     """
-    silver = dlt.read("silver_episodes")
+    silver = spark.read.table("silver_episodes")
     daily = (
         silver
         .withColumn("report_date", F.to_date("ingested_at"))

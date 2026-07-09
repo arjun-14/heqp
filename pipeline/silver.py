@@ -8,8 +8,8 @@ Parses compressed JSON payloads from Bronze and validates episode data.
 
 import json
 import gzip
-import dlt
 
+from pyspark import pipelines as dp
 from pyspark.sql.types import (
     StructType, StructField, StringType, FloatType, IntegerType, BinaryType, ArrayType
 )
@@ -86,14 +86,14 @@ def extract_payload(payload):
 # Silver streaming table
 # ---------------------------------------------------------------------------
 
-@dlt.table(
+@dp.table(
     name="silver_episodes",
     comment="Structured episodes extracted from Bronze compressed payloads.",
     partition_cols=["routing_decision"],
 )
-@dlt.expect_or_drop("valid_episode_id", "episode_id IS NOT NULL")
-@dlt.expect_or_drop("valid_routing",    "routing_decision IN ('CERTIFIED', 'BORDERLINE', 'REJECTED')")
-@dlt.expect("valid_score",              "composite_score BETWEEN 0 AND 100")
+@dp.expect_or_drop("valid_episode_id", "episode_id IS NOT NULL")
+@dp.expect_or_drop("valid_routing",    "routing_decision IN ('CERTIFIED', 'BORDERLINE', 'REJECTED')")
+@dp.expect("valid_score",              "composite_score BETWEEN 0 AND 100")
 def silver_episodes():
     """
     Parse and validate episode data from Bronze Event Hubs stream.
@@ -106,7 +106,7 @@ def silver_episodes():
     
     Returns streaming DataFrame partitioned by routing_decision.
     """
-    bronze = dlt.read_stream("bronze_episodes")
+    bronze = spark.readStream.table("bronze_episodes")
     return (
         bronze
         .withColumn("parsed", extract_payload(col("payload").cast(BinaryType())))
