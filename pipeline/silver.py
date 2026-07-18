@@ -50,7 +50,11 @@ def extract_payload(payload):
     """
     Decompress and parse gzipped JSON payload from Bronze.
     
-    Returns structured episode data with quality scores and routing decision.
+    Args:
+        payload: Gzipped episode bytes (BinaryType)
+    
+    Returns:
+        Structured episode data with quality scores and routing decision.
     """
     if not payload:
         return None
@@ -109,7 +113,7 @@ def silver_episodes():
     bronze = spark.readStream.table("bronze_episodes")
     return (
         bronze
-        .withColumn("parsed", extract_payload(col("payload").cast(BinaryType())))
+        .withColumn("parsed", extract_payload(col("payload")))
         .filter(col("parsed").isNotNull())
         .select(
             col("parsed.*"),

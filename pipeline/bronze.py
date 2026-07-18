@@ -24,7 +24,6 @@ Setup:
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
 from pyspark.dbutils import DBUtils
 
 # ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ def bronze_episodes():
     Ingest raw episode JSON from Event Hubs into Bronze.
     
     Returns a streaming DataFrame with columns:
-    - payload: Raw episode JSON string
+    - payload: Raw gzipped episode bytes (BinaryType)
     - ingested_at: Timestamp when row entered the pipeline
     - source: Event Hubs topic name
     - kafka_partition: Kafka partition ID
@@ -107,11 +106,11 @@ def bronze_episodes():
     )
 
     # Kafka gives us: key, value (bytes), topic, partition, offset, timestamp
-    # value is the episode JSON, encoded as bytes
+    # Store value as-is (BinaryType) - no conversion, pure raw data
     return (
         raw_stream
         .select(
-            F.col("value").cast(StringType()).alias("payload"),
+            F.col("value").alias("payload"),
             F.current_timestamp().alias("ingested_at"),
             F.col("topic").alias("source"),
             F.col("partition").alias("kafka_partition"),
